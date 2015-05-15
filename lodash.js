@@ -37,7 +37,8 @@
   /** Used to indicate the type of lazy iteratees. */
   var LAZY_DROP_WHILE_FLAG = 0,
       LAZY_FILTER_FLAG = 1,
-      LAZY_MAP_FLAG = 2;
+      LAZY_MAP_FLAG = 2,
+      LAZY_REDUCE_FLAG = 4;
 
   /** Used as the `TypeError` message for "Functions" methods. */
   var FUNC_ERROR_TEXT = 'Expected a function';
@@ -1153,15 +1154,55 @@
       if (!isArray(array)) {
         return baseWrapperValue(array, this.__actions__);
       }
-      var dir = this.__dir__,
+      return lazyIterate(this, array);
+    }
+
+    function lazyIterate(wrapper, array){
+      var iteratees = wrapper.__iteratees__,
+        iterLength = iteratees ? iteratees.length : 0,
+        noneArrays,
+        reduceIndex,
+        nextIndex = 0,
+        value = array;
+
+      noneArrays = arrayMap(iteratees, function(data, index){
+        if(data.type === LAZY_REDUCE_FLAG){
+          return index;
+        }
+      });
+      noneArrays = arrayFilter(noneArrays, isNumber);
+
+      var index = -1,
+        length = noneArrays.length;
+
+      //If there is no reduce this will do the same exact process as before
+      if(!length || noneArrays[0] > 0){
+        value = lazyArrayIterate(wrapper, value, _.slice(iteratees, 0, noneArrays[0] || iterLength));
+      }
+
+      while (++index < length) {
+        reduceIndex = noneArrays[index];
+        data = iteratees[reduceIndex];
+
+        value = lodash.reduce(value, data.iteratee, data.rest[0], data.rest[1]);
+
+        if(reduceIndex < iterLength - 1){
+          nextIndex = (index === length - 1) ? iterLength : noneArrays[index + 1];
+          value = lazyArrayIterate(wrapper, value, _.slice(iteratees, (reduceIndex + 1), nextIndex));
+        }
+      }
+      return value;
+    }
+
+    function lazyArrayIterate(wrapper, array, iteratees) {
+      var dir = wrapper.__dir__,
           isRight = dir < 0,
-          view = getView(0, array.length, this.__views__),
+          view = getView(0, array.length, wrapper.__views__),
           start = view.start,
           end = view.end,
           length = end - start,
           index = isRight ? end : (start - 1),
-          takeCount = nativeMin(length, this.__takeCount__),
-          iteratees = this.__iteratees__,
+          takeCount = nativeMin(length, wrapper.__takeCount__),
           iterLength = iteratees ? iteratees.length : 0,
           resIndex = 0,
           result = [];
@@ -11955,9 +11996,10 @@
     });
 
     // Add `LazyWrapper` methods that accept an `iteratee` value.
-    arrayEach(['dropWhile', 'filter', 'map', 'takeWhile'], function(methodName, type) {
-      var isFilter = type != LAZY_MAP_FLAG,
-          isDropWhile = type == LAZY_DROP_WHILE_FLAG;
+    arrayEach(['dropWhile', 'filter', 'map', 'takeWhile', 'reduce'], function(methodName, type) {
+      var isFilter = type != LAZY_MAP_FLAG && type != LAZY_REDUCE_FLAG,
+          isDropWhile = type == LAZY_DROP_WHILE_FLAG,
+          argsCount = (type == LAZY_REDUCE_FLAG) ? 4 : 1;
 
       LazyWrapper.prototype[methodName] = function(iteratee, thisArg) {
         var filtered = this.__filtered__,
@@ -11968,9 +12010,10 @@
           'done': false,
           'count': 0,
           'index': 0,
-          'iteratee': getCallback(iteratee, thisArg, 1),
+          'iteratee': getCallback(iteratee, thisArg, argsCount),
           'limit': -1,
-          'type': type
+          'type': type,
+          'rest': rest(arguments)
         });
 
         result.__filtered__ = filtered || isFilter;
